@@ -17,12 +17,70 @@
   "version": "1.0.0",
   "description": "REST API for managing lawnmower fleet",
   "endpoints": {
-    "lawnmowers": "/api/lawnmowers",
-    "battery": "/api/lawnmower/:id/battery",
-    "gps": "/api/lawnmower/:id/gps",
-    "state": "/api/lawnmower/:id/state",
-    "analytics": "/api/lawnmower/:id/analytics",
-    "actions": "/api/lawnmower/:id/actions"
+    "health": "GET /api/health",
+    "api_info": "GET /api",
+    
+    "lawnmowers": {
+      "get_all": "GET /api/lawnmowers",
+      "get_by_id": "GET /api/lawnmower/:id",
+      "create": "POST /api/lawnmower",
+      "update": "PUT /api/lawnmower",
+      "delete": "DELETE /api/lawnmower/:id"
+    },
+    
+    "battery": {
+      "current": "GET /api/lawnmower/:id/battery/current",
+      "history": "GET /api/lawnmower/:id/battery/history?from=DATE&to=DATE",
+      "add_reading": "POST /api/lawnmower/:id/battery"
+    },
+    
+    "gps": {
+      "current": "GET /api/lawnmower/:id/gps/current",
+      "history": "GET /api/lawnmower/:id/gps/history?from=DATE&to=DATE",
+      "add_reading": "POST /api/lawnmower/:id/gps"
+    },
+    
+    "state": {
+      "current": "GET /api/lawnmower/:id/state/current",
+      "history": "GET /api/lawnmower/:id/state/history?from=DATE&to=DATE",
+      "add_change": "POST /api/lawnmower/:id/state",
+      "valid_states": "GET /api/states"
+    },
+    
+    "analytics": {
+      "distance": "GET /api/lawnmower/:id/analytics/distance?from=DATE&to=DATE",
+      "hours": "GET /api/lawnmower/:id/analytics/hours?from=DATE&to=DATE",
+      "efficiency": "GET /api/lawnmower/:id/analytics/efficency?from=DATE&to=DATE",
+      "energy": "GET /api/lawnmower/:id/analytics/energy?from=DATE&to=DATE"
+    },
+    
+    "actions": {
+      "stop": "POST /api/lawnmower/:id/actions/stop",
+      "start": "POST /api/lawnmower/:id/actions/start",
+      "home": "POST /api/lawnmower/:id/actions/home",
+      "acknowledge_error": "POST /api/lawnmower/:id/actions/ackerror",
+      "valid_actions": "GET /api/actions"
+    }
+  },
+  
+  "query_parameters": {
+    "lawnmowers": "?id=ID&name=NAME&vendor=VENDOR",
+    "date_range": "?from=YYYY-MM-DD&to=YYYY-MM-DD (or YYYY-MM-DD HH:MM:SS)"
+  },
+  
+  "example_requests": {
+    "get_all_lawnmowers": "GET /api/lawnmowers",
+    "get_lawnmower_by_id": "GET /api/lawnmower/507",
+    "filter_lawnmowers": "GET /api/lawnmowers?vendor=Husqvarna",
+    "current_battery": "GET /api/lawnmower/507/battery/current",
+    "battery_history": "GET /api/lawnmower/507/battery/history?from=2025-01-01&to=2025-01-31",
+    "current_position": "GET /api/lawnmower/507/gps/current",
+    "current_state": "GET /api/lawnmower/507/state/current",
+    "calculate_distance": "GET /api/lawnmower/507/analytics/distance?from=2025-01-01&to=2025-01-31",
+    "stop_lawnmower": "POST /api/lawnmower/507/actions/stop",
+    "add_battery_reading": "POST /api/lawnmower/507/battery",
+    "create_lawnmower": "POST /api/lawnmower",
+    "update_lawnmower": "PUT /api/lawnmower"
   }
 }</code></pre>
   </body>

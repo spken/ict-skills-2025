@@ -40,6 +40,8 @@ class LawnmowerServer {
         const batteryRoutes = require('./routes/battery');
         const gpsRoutes = require('./routes/gps');
         const stateRoutes = require('./routes/state');
+        const analyticsRoutes = require('./routes/analytics');
+        const actionsRoutes = require('./routes/actions');
 
         // Health check endpoint
         this.app.get('/api/health', (req, res) => {
@@ -75,6 +77,10 @@ class LawnmowerServer {
         this.app.use('/api/lawnmower', batteryRoutes);
         this.app.use('/api/lawnmower', gpsRoutes);
         this.app.use('/api/lawnmower', stateRoutes);
+        
+        // Analytics and actions routes
+        this.app.use('/api/lawnmower', analyticsRoutes);
+        this.app.use('/api/lawnmower', actionsRoutes);
 
         // Error handling middleware
         this.app.use((error, req, res, next) => {
