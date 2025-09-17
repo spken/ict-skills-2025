@@ -1,4 +1,5 @@
 const dbConnection = require('../database/connection');
+const LawnmowerTCPClient = require('./lawnmowerTCPClient');
 
 class ActionsService {
     constructor() {
@@ -11,13 +12,29 @@ class ActionsService {
             HOME: 'home',
             ACK_ERROR: 'ackerror'
         };
+
+        // Map actions to TCP command structure
+        this.actionToCommandMap = {
+            'stop': { command: 0x01, action: 0x00 },    // CONTROL_DEVICE with STOP
+            'start': { command: 0x01, action: 0x01 },   // CONTROL_DEVICE with START
+            'home': { command: 0x01, action: 0x02 },    // CONTROL_DEVICE with HOME  
+            'ackerror': { command: 0x02, action: null } // ACK_ERROR command
+        };
     }
 
     async executeAction(lawnmowerId, action) {
-        // Verify lawnmower exists
-        const exists = await this.verifyLawnmowerExists(lawnmowerId);
-        if (!exists) {
+        // Verify lawnmower exists and get its details
+        const lawnmowerInfo = await this.getLawnmowerInfo(lawnmowerId);
+        if (!lawnmowerInfo) {
             throw new Error('Lawnmower not found');
+        }
+
+        if (!lawnmowerInfo.port_number) {
+            // Get list of lawnmowers with port numbers configured for better error message
+            const availablePorts = await this.getLawnmowersWithPorts();
+            const errorMessage = `Lawnmower ${lawnmowerId} does not have a TCP port configured. ` +
+                `Available lawnmowers with TCP control: ${availablePorts.map(l => `ID ${l.id} (${l.name}) on port ${l.port_number}`).join(', ')}`;
+            throw new Error(errorMessage);
         }
 
         // Get current state to validate action
@@ -33,8 +50,26 @@ class ActionsService {
         await this.logAction(lawnmowerId, action, 'requested');
 
         try {
-            // In a real implementation, this would send the command to the IoT device
-            // For now, we'll simulate the action by updating the state accordingly
+            // Send TCP command to the lawnmower
+            const commandMapping = this.actionToCommandMap[action];
+            if (!commandMapping) {
+                throw new Error(`Unknown action: ${action}`);
+            }
+
+            const tcpClient = new LawnmowerTCPClient();
+            
+            console.log(`Sending TCP command ${commandMapping.command} (action: ${commandMapping.action}) for '${action}' to lawnmower ${lawnmowerId} on port ${lawnmowerInfo.port_number}`);
+            
+            // Send authenticated command to the lawnmower
+            const response = await tcpClient.sendAuthenticatedCommand(
+                lawnmowerInfo.port_number,
+                commandMapping.command,
+                commandMapping.action
+            );
+
+            console.log('TCP command completed successfully');
+
+            // Update the expected state based on the action
             const newState = this.getExpectedStateForAction(action, currentState);
             
             if (newState) {
@@ -42,19 +77,21 @@ class ActionsService {
             }
 
             // Log successful action
-            await this.logAction(lawnmowerId, action, 'completed');
+            await this.logAction(lawnmowerId, action, 'completed', `TCP response received`);
             
             return {
                 success: true,
                 action: action,
                 previousState: currentState,
                 newState: newState || currentState,
-                timestamp: new Date().toISOString()
+                timestamp: new Date().toISOString(),
+                tcpResponse: response
             };
         } catch (error) {
             // Log failed action
             await this.logAction(lawnmowerId, action, 'failed', error.message);
-            throw error;
+            console.error(`TCP command failed for action '${action}' on lawnmower ${lawnmowerId}:`, error);
+            throw new Error(`Failed to execute ${action} command: ${error.message}`);
         }
     }
 
@@ -174,18 +211,32 @@ class ActionsService {
         }
     }
 
-    async verifyLawnmowerExists(lawnmowerId) {
+    async getLawnmowerInfo(lawnmowerId) {
         const connection = this.db.getConnection();
         
-        const query = 'SELECT id FROM lawnmowers WHERE id = ?';
+        const query = `
+            SELECT id, name, port_number, serial_number
+            FROM lawnmowers 
+            WHERE id = ?
+        `;
         
         try {
             const [rows] = await connection.execute(query, [lawnmowerId]);
-            return rows.length > 0;
+            
+            if (rows.length === 0) {
+                return null;
+            }
+            
+            return rows[0];
         } catch (error) {
-            console.error('Error verifying lawnmower exists:', error);
-            throw new Error('Failed to verify lawnmower');
+            console.error('Error fetching lawnmower info:', error);
+            throw new Error('Failed to fetch lawnmower information');
         }
+    }
+
+    async verifyLawnmowerExists(lawnmowerId) {
+        const info = await this.getLawnmowerInfo(lawnmowerId);
+        return info !== null;
     }
 
     getValidActions() {
