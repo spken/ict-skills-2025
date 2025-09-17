@@ -81,5 +81,37 @@
     "update_lawnmower": "PUT /api/lawnmower"
   }
 }</code></pre>
+
+    <h2>TCP Test Client</h2>
+    <p>A Node.js test client for testing the lawnmower TCP protocol communication.</p>
+    <h3>Usage</h3>
+    <pre><code>Usage: node tcp-test-client.js [command] [options]
+
+Commands:
+  test-frames &lt;port&gt;     - Test with provided assignment frames
+  authenticate &lt;port&gt;    - Perform full authentication
+  heartbeat &lt;port&gt;       - Send heartbeat (with bypass auth)
+  control &lt;port&gt; &lt;action&gt; - Send control command (0=STOP, 1=START, 2=HOME)
+
+Examples:
+  node tcp-test-client.js test-frames 5000
+  node tcp-test-client.js authenticate 5000
+  node tcp-test-client.js heartbeat 5000
+  node tcp-test-client.js control 5000 1</code></pre>
+    
+    <h3>Available Commands</h3>
+    <ul>
+      <li><strong>test-frames</strong> - Tests the connection using the example frames provided in the assignment</li>
+      <li><strong>authenticate</strong> - Performs the full Diffie-Hellman authentication handshake</li>
+      <li><strong>heartbeat</strong> - Sends a heartbeat message (uses bypass authentication)</li>
+      <li><strong>control</strong> - Sends control commands to the lawnmower:
+        <ul>
+          <li>0 = STOP</li>
+          <li>1 = START</li>
+          <li>2 = HOME</li>
+        </ul>
+      </li>
+    </ul>
+
   </body>
 </html>
