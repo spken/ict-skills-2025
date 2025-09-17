@@ -2,11 +2,23 @@
 <html>
   <head>
     <meta charset="UTF-8" />
-    <title>Hello World!</title>
+    <title>Lawnmower Management API</title>
     <link rel="stylesheet" href="index.css" />
   </head>
   <body>
-    <h1>💖 Hello World!</h1>
-    <p>Welcome to your Electron application.</p>
+    <h1>🧏‍♂️ Lawnmower Management API</h1>
+    <pre><code>{
+  "name": "Lawnmower Management API",
+  "version": "1.0.0",
+  "description": "REST API for managing lawnmower fleet",
+  "endpoints": {
+    "lawnmowers": "/api/lawnmowers",
+    "battery": "/api/lawnmower/:id/battery",
+    "gps": "/api/lawnmower/:id/gps",
+    "state": "/api/lawnmower/:id/state",
+    "analytics": "/api/lawnmower/:id/analytics",
+    "actions": "/api/lawnmower/:id/actions"
+  }
+}</code></pre>
   </body>
 </html>
