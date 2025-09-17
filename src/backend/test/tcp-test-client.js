@@ -42,11 +42,17 @@ class LawnmowerTestClient {
             this.client.on('close', () => {
                 console.log('Connection closed');
                 this.connected = false;
+                this.authenticated = false;
             });
 
             this.client.on('error', (error) => {
                 console.error('Connection error:', error);
-                reject(error);
+                this.connected = false;
+                this.authenticated = false;
+                // Don't reject here if we're already connected, just log
+                if (!this.connected) {
+                    reject(error);
+                }
             });
         });
     }
@@ -57,23 +63,63 @@ class LawnmowerTestClient {
     handleData(data) {
         try {
             console.log(`Received: ${data.toString('hex')}`);
+            console.log(`Frame length: ${data.length} bytes`);
+            
             const frame = this.parseFrame(data);
             console.log('Parsed frame payload:', frame.payload.toString('hex'));
+            console.log('Frame checksum:', frame.checksum.toString('hex'));
+            
+            // Parse presentation message first (IIN + session message)
+            const presentationMsg = this.parsePresentationMessage(frame.payload);
+            console.log(`IIN: ${presentationMsg.iin}`);
+            console.log('Presentation payload:', presentationMsg.payload.toString('hex'));
             
             // Parse session message
-            const sessionMsg = this.parseSessionMessage(frame.payload);
+            const sessionMsg = this.parseSessionMessage(presentationMsg.payload);
             console.log(`Message type: 0x${sessionMsg.messageType.toString(16).padStart(2, '0')}`);
+            console.log(`HMAC: ${sessionMsg.hmac.toString('hex')}`);
+            console.log(`Session payload: ${sessionMsg.payload.toString('hex')}`);
             
             // Handle different message types
             if (sessionMsg.messageType === 0x02) { // Challenge
                 this.handleChallenge(sessionMsg.payload);
             } else if (sessionMsg.messageType === 0x00) { // Regular response
                 console.log('Received regular response');
+                // Check if this might be a challenge response with wrong message type
+                if (sessionMsg.payload.length >= 16) {
+                    console.log('Payload is long enough to be a challenge, attempting to parse as challenge...');
+                    this.handleChallenge(sessionMsg.payload);
+                } else if (this.authenticated && sessionMsg.payload.length <= 4) {
+                    console.log('Received short response - likely auth acknowledgment');
+                    // This could be an auth acknowledgment
+                } else {
+                    console.log('Received other regular response');
+                }
+            } else if (sessionMsg.messageType === 0x04) { // Auth acknowledgment
+                console.log('Received authentication acknowledgment');
+                this.authenticated = true;
+                if (this.onAuthComplete) {
+                    this.onAuthComplete();
+                }
             }
             
         } catch (error) {
             console.error('Error parsing received data:', error);
+            console.error('Raw data:', data.toString('hex'));
         }
+    }
+
+    /**
+     * Parse presentation message (IIN + payload)
+     */
+    parsePresentationMessage(buffer) {
+        if (buffer.length < 2) {
+            throw new Error('Presentation message too short');
+        }
+        return {
+            iin: buffer.readUInt16BE(0),
+            payload: buffer.slice(2)
+        };
     }
 
     /**
@@ -90,7 +136,46 @@ class LawnmowerTestClient {
         const buffer = Buffer.from(cleanHex, 'hex');
         
         console.log(`Sending hex frame: ${cleanHex}`);
+        
+        // Validate the frame before sending
+        try {
+            this.validateFrame(buffer);
+            console.log('Frame validation: PASSED');
+        } catch (error) {
+            console.error('Frame validation: FAILED -', error.message);
+            console.error('Sending anyway for testing purposes...');
+        }
+        
         this.client.write(buffer);
+    }
+
+    /**
+     * Validate frame structure and checksum
+     */
+    validateFrame(buffer) {
+        if (buffer[0] !== this.SOF_MARKER) {
+            throw new Error('Invalid SOF marker');
+        }
+
+        let offset = 1;
+        const lengthResult = this.decodeLength(buffer, offset);
+        offset = lengthResult.offset;
+        
+        const payloadLength = lengthResult.length;
+        
+        if (buffer.length < offset + payloadLength + 2) {
+            throw new Error(`Frame too short: expected ${offset + payloadLength + 2}, got ${buffer.length}`);
+        }
+        
+        const frameWithoutChecksum = buffer.slice(0, offset + payloadLength);
+        const receivedChecksum = buffer.slice(offset + payloadLength, offset + payloadLength + 2);
+        const calculatedChecksum = this.calculateChecksum(frameWithoutChecksum);
+        
+        if (!receivedChecksum.equals(calculatedChecksum)) {
+            throw new Error(`Checksum mismatch: expected ${calculatedChecksum.toString('hex')}, got ${receivedChecksum.toString('hex')}`);
+        }
+        
+        console.log(`Frame structure: SOF=${buffer[0].toString(16)} Length=${payloadLength} Payload=${buffer.slice(offset, offset + payloadLength).toString('hex')} Checksum=${receivedChecksum.toString('hex')}`);
     }
 
     /**
@@ -109,13 +194,12 @@ class LawnmowerTestClient {
         console.log(`Client secret: 0x${this.clientSecret.toString(16)}`);
         console.log(`Client public key: 0x${this.clientPublicKey.toString(16)}`);
         
-        // Create Hello message
+        // Create Hello message - this should be a raw session message, not wrapped in presentation
         const helloPayload = Buffer.alloc(4);
         helloPayload.writeUInt32BE(this.clientPublicKey, 0);
         
         const sessionMessage = this.createSessionMessage(0x01, helloPayload);
-        const presentationMsg = this.createPresentationMessage(this.iinCounter++, sessionMessage);
-        const frame = this.createFrame(presentationMsg);
+        const frame = this.createFrame(sessionMessage);
         
         console.log(`Sending Hello: ${frame.toString('hex')}`);
         this.client.write(frame);
@@ -125,14 +209,27 @@ class LawnmowerTestClient {
      * Handle challenge response from server
      */
     handleChallenge(payload) {
-        if (payload.length < 16) {
-            console.error('Invalid challenge payload length');
+        console.log(`Raw challenge payload length: ${payload.length}`);
+        console.log(`Raw challenge payload: ${payload.toString('hex')}`);
+        
+        // Check if payload starts with response code (like 0002)
+        let offset = 0;
+        if (payload.length >= 2 && payload.readUInt16BE(0) === 0x0002) {
+            console.log('Detected response code 0002, skipping it');
+            offset = 2;
+        }
+        
+        const challengeData = payload.slice(offset);
+        console.log(`Challenge data: ${challengeData.toString('hex')} (${challengeData.length} bytes)`);
+        
+        if (challengeData.length < 16) {
+            console.error('Invalid challenge payload length after parsing');
             return;
         }
         
-        this.serverPublicKey = payload.readUInt32BE(0);
-        this.nonce = payload.readBigUInt64BE(4);
-        const authS = payload.readUInt32BE(12);
+        this.serverPublicKey = challengeData.readUInt32BE(0);
+        this.nonce = challengeData.readBigUInt64BE(4);
+        const authS = challengeData.readUInt32BE(12);
         
         console.log(`Server public key: 0x${this.serverPublicKey.toString(16)}`);
         console.log(`Nonce: 0x${this.nonce.toString(16)}`);
@@ -158,8 +255,7 @@ class LawnmowerTestClient {
         authCPayload.writeUInt32BE(authC, 0);
         
         const sessionMessage = this.createSessionMessage(0x03, authCPayload);
-        const presentationMsg = this.createPresentationMessage(this.iinCounter++, sessionMessage);
-        const frame = this.createFrame(presentationMsg);
+        const frame = this.createFrame(sessionMessage);
         
         console.log(`Sending Client Auth: ${frame.toString('hex')}`);
         this.client.write(frame);
@@ -170,12 +266,37 @@ class LawnmowerTestClient {
         this.authenticated = true;
         
         console.log('Authentication complete!');
+        
+        // Emit authentication complete event if we have callbacks waiting
+        if (this.onAuthComplete) {
+            this.onAuthComplete();
+        }
+    }
+
+    /**
+     * Authenticate and then execute a callback
+     */
+    authenticateAndThen(callback, delay = 100) { // Reduced delay to 100ms
+        if (this.authenticated) {
+            // Already authenticated, execute immediately
+            callback();
+            return;
+        }
+        
+        // Set up callback for when authentication completes
+        this.onAuthComplete = () => {
+            setTimeout(callback, delay);
+            this.onAuthComplete = null; // Clear the callback
+        };
+        
+        // Start authentication
+        this.authenticate();
     }
 
     /**
      * Send heartbeat command
      */
-    sendHeartbeat(payload = 'FACE') {
+    sendHeartbeat(payload = 'FACE', useBypassAuth = false) {
         if (!this.connected) {
             console.error('Not connected');
             return;
@@ -185,12 +306,17 @@ class LawnmowerTestClient {
         const command = this.createCommand(0x00, payloadBuffer);
         const presentationMsg = this.createPresentationMessage(this.iinCounter++, command);
         
-        // Calculate HMAC if authenticated
+        // Calculate HMAC - prefer proper auth if available
         let hmac;
-        if (this.authenticated) {
+        if (this.authenticated && !useBypassAuth) {
             hmac = this.calculateHMAC(this.sharedSecret, presentationMsg);
-        } else {
+            console.log('Using authenticated HMAC');
+        } else if (useBypassAuth) {
             hmac = Buffer.from([0xFA, 0xDE, 0xDB, 0xED]); // Bypass
+            console.log('Using bypass authentication');
+        } else {
+            console.error('Not authenticated and bypass not requested - cannot send heartbeat');
+            return;
         }
         
         const sessionMessage = this.createSessionMessage(0x00, presentationMsg, hmac);
@@ -203,7 +329,7 @@ class LawnmowerTestClient {
     /**
      * Send control command
      */
-    sendControlCommand(action) {
+    sendControlCommand(action, useBypassAuth = false) {
         if (!this.connected) {
             console.error('Not connected');
             return;
@@ -213,11 +339,17 @@ class LawnmowerTestClient {
         const command = this.createCommand(0x01, actionBuffer);
         const presentationMsg = this.createPresentationMessage(this.iinCounter++, command);
         
+        // Calculate HMAC - prefer proper auth if available
         let hmac;
-        if (this.authenticated) {
+        if (this.authenticated && !useBypassAuth) {
             hmac = this.calculateHMAC(this.sharedSecret, presentationMsg);
-        } else {
+            console.log('Using authenticated HMAC');
+        } else if (useBypassAuth) {
             hmac = Buffer.from([0xFA, 0xDE, 0xDB, 0xED]); // Bypass
+            console.log('Using bypass authentication');
+        } else {
+            console.error('Not authenticated and bypass not requested - cannot send control command');
+            return;
         }
         
         const sessionMessage = this.createSessionMessage(0x00, presentationMsg, hmac);
@@ -250,8 +382,26 @@ class LawnmowerTestClient {
         const lengthResult = this.decodeLength(buffer, offset);
         offset = lengthResult.offset;
         
-        const payload = buffer.slice(offset, offset + lengthResult.length);
-        return { payload };
+        const payloadLength = lengthResult.length;
+        const payload = buffer.slice(offset, offset + payloadLength);
+        const receivedChecksum = buffer.slice(offset + payloadLength, offset + payloadLength + 2);
+        
+        // Validate frame length
+        if (buffer.length < offset + payloadLength + 2) {
+            throw new Error('Frame too short for declared length and checksum');
+        }
+        
+        // Validate checksum
+        const frameWithoutChecksum = buffer.slice(0, offset + payloadLength);
+        const calculatedChecksum = this.calculateChecksum(frameWithoutChecksum);
+        
+        if (!receivedChecksum.equals(calculatedChecksum)) {
+            console.warn('Checksum mismatch - frame may be corrupted');
+            console.warn(`Expected: ${calculatedChecksum.toString('hex')}, Got: ${receivedChecksum.toString('hex')}`);
+            // Don't throw error, just warn for debugging
+        }
+        
+        return { payload, checksum: receivedChecksum };
     }
 
     encodeLength(length) {
@@ -376,7 +526,14 @@ class LawnmowerTestClient {
 
     disconnect() {
         if (this.client) {
-            this.client.destroy();
+            console.log('Closing connection gracefully...');
+            this.client.end(); // Graceful close
+            setTimeout(() => {
+                if (this.client && !this.client.destroyed) {
+                    console.log('Force closing connection...');
+                    this.client.destroy();
+                }
+            }, 1000);
         }
     }
 }
@@ -388,16 +545,20 @@ function printUsage() {
 Usage: node tcp-test-client.js [command] [options]
 
 Commands:
-  test-frames <port>     - Test with provided assignment frames
-  authenticate <port>    - Perform full authentication
-  heartbeat <port>       - Send heartbeat (with bypass auth)
-  control <port> <action> - Send control command (0=STOP, 1=START, 2=HOME)
+  test-frames <port>     - Test with provided assignment frames (bypass auth)
+  test-hello <port>      - Test only Hello frame exchange
+  authenticate <port>    - Perform full authentication and send commands
+  auth-heartbeat <port>  - Authenticate then send heartbeat
+  auth-control <port> <action> - Authenticate then send control command
+  heartbeat-bypass <port> - Send heartbeat with bypass auth
+  control-bypass <port> <action> - Send control with bypass auth
 
 Examples:
-  node tcp-test-client.js test-frames 5000
   node tcp-test-client.js authenticate 5000
-  node tcp-test-client.js heartbeat 5000
-  node tcp-test-client.js control 5000 1
+  node tcp-test-client.js auth-heartbeat 5000
+  node tcp-test-client.js auth-control 5000 1
+  node tcp-test-client.js test-hello 5000
+  node tcp-test-client.js heartbeat-bypass 5000
 `);
 }
 
@@ -423,21 +584,35 @@ async function main() {
         await client.connect(port);
 
         switch (command) {
+            case 'test-hello':
+                console.log('Testing Hello frame only...');
+                console.log('\n=== Sending Hello Frame ===');
+                client.sendHexFrame('AA0900000000014E254254FE43');
+                break;
+
             case 'test-frames':
                 console.log('Testing with assignment example frames...');
                 
                 // Hello frame from assignment
+                console.log('\n=== Sending Hello Frame ===');
                 client.sendHexFrame('AA0900000000014E254254FE43');
                 
+                // Wait for server response before sending next frame
                 setTimeout(() => {
-                    // Echo request with bypass auth
-                    client.sendHexFrame('AA0A9FA50DF400123400FACEFAF9');
-                }, 1000);
+                    if (client.connected) {
+                        console.log('\n=== Sending Echo Request (Bypass Auth) ===');
+                        // Echo request with bypass auth
+                        client.sendHexFrame('AA0A9FA50DF400123400FACEFAF9');
+                    }
+                }, 1500); // Increased delay to ensure server processes first frame
                 
                 setTimeout(() => {
-                    // Start command with bypass auth
-                    client.sendHexFrame('AA09FADEDBED0012340101FB65');
-                }, 2000);
+                    if (client.connected) {
+                        console.log('\n=== Sending Control Command (Bypass Auth) ===');
+                        // Start command with bypass auth
+                        client.sendHexFrame('AA09FADEDBED0012340101FB65');
+                    }
+                }, 3000); // Further increased delay
                 
                 break;
 
@@ -447,23 +622,55 @@ async function main() {
                 
                 // Send heartbeat after authentication
                 setTimeout(() => {
-                    client.sendHeartbeat();
+                    if (client.authenticated) {
+                        console.log('\n=== Sending authenticated heartbeat ===');
+                        client.sendHeartbeat();
+                    }
                 }, 3000);
+                
+                // Send control command after heartbeat
+                setTimeout(() => {
+                    if (client.authenticated) {
+                        console.log('\n=== Sending authenticated START command ===');
+                        client.sendControlCommand(1); // START
+                    }
+                }, 5000);
                 break;
 
-            case 'heartbeat':
-                console.log('Sending heartbeat with bypass auth...');
-                client.sendHeartbeat();
+            case 'auth-heartbeat':
+                console.log('Authenticating and sending heartbeat...');
+                client.authenticateAndThen(() => {
+                    console.log('\n=== Sending authenticated heartbeat ===');
+                    client.sendHeartbeat();
+                });
                 break;
 
-            case 'control':
+            case 'auth-control':
                 if (args.length < 3) {
                     console.error('Control command requires action (0=STOP, 1=START, 2=HOME)');
                     process.exit(1);
                 }
-                const action = parseInt(args[2]);
-                console.log(`Sending control command: ${action}`);
-                client.sendControlCommand(action);
+                const authAction = parseInt(args[2]);
+                console.log('Authenticating and sending control command...');
+                client.authenticateAndThen(() => {
+                    console.log(`\n=== Sending authenticated control command ===`);
+                    client.sendControlCommand(authAction);
+                });
+                break;
+
+            case 'heartbeat-bypass':
+                console.log('Sending heartbeat with bypass auth...');
+                client.sendHeartbeat('FACE', true); // useBypassAuth = true
+                break;
+
+            case 'control-bypass':
+                if (args.length < 3) {
+                    console.error('Control command requires action (0=STOP, 1=START, 2=HOME)');
+                    process.exit(1);
+                }
+                const bypassAction = parseInt(args[2]);
+                console.log(`Sending control command with bypass auth...`);
+                client.sendControlCommand(bypassAction, true); // useBypassAuth = true
                 break;
 
             default:
