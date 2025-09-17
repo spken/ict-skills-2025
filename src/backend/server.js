@@ -37,6 +37,9 @@ class LawnmowerServer {
     setupRoutes() {
         // Import route modules
         const lawnmowerRoutes = require('./routes/lawnmowers');
+        const batteryRoutes = require('./routes/battery');
+        const gpsRoutes = require('./routes/gps');
+        const stateRoutes = require('./routes/state');
 
         // Health check endpoint
         this.app.get('/api/health', (req, res) => {
@@ -67,6 +70,11 @@ class LawnmowerServer {
         // Register API routes
         this.app.use('/api/lawnmowers', lawnmowerRoutes);
         this.app.use('/api/lawnmower', lawnmowerRoutes);
+        
+        // Telemetry routes
+        this.app.use('/api/lawnmower', batteryRoutes);
+        this.app.use('/api/lawnmower', gpsRoutes);
+        this.app.use('/api/lawnmower', stateRoutes);
 
         // Error handling middleware
         this.app.use((error, req, res, next) => {
