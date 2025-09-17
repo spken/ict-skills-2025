@@ -3,6 +3,7 @@ const cors = require('cors');
 const bodyParser = require('body-parser');
 const path = require('path');
 const dbConnection = require('./database/connection');
+const tcpService = require('./services/tcpService');
 
 class LawnmowerServer {
     constructor() {
@@ -54,10 +55,16 @@ class LawnmowerServer {
 
         // Basic API info
         this.app.get('/api', (req, res) => {
+            const tcpStats = tcpService.getStats();
             res.json({
                 name: 'Lawnmower Management API',
                 version: '1.0.0',
                 description: 'REST API for managing lawnmower fleet',
+                tcp: {
+                    activeServers: tcpStats.activeServers,
+                    activeConnections: tcpStats.activeConnections,
+                    authenticatedConnections: tcpStats.authenticatedConnections
+                },
                 endpoints: {
                     lawnmowers: '/api/lawnmowers',
                     battery: '/api/lawnmower/:id/battery',
@@ -107,12 +114,16 @@ class LawnmowerServer {
             await dbConnection.connect();
             await dbConnection.initializeSchema();
 
-            // Start server
+            // Start HTTP server
             this.server = this.app.listen(this.port, () => {
                 console.log(`Lawnmower Management Server running on port ${this.port}`);
                 console.log(`API available at: http://localhost:${this.port}/api`);
                 console.log(`Health check: http://localhost:${this.port}/api/health`);
             });
+
+            // Start TCP servers for IoT communication
+            console.log('Starting TCP servers for IoT devices...');
+            await tcpService.startServers();
 
             return this.server;
         } catch (error) {
@@ -123,6 +134,9 @@ class LawnmowerServer {
 
     async stop() {
         console.log('Shutting down server...');
+        
+        // Stop TCP servers first
+        await tcpService.stopServers();
         
         if (this.server) {
             this.server.close();
